@@ -1,0 +1,10 @@
+[
+  {
+    "name": "001_planned_bookings.sql",
+    "checksum": "45a3201bd5731674ff1ef8cdc1644a4405e41dfbc1e8e544125752128badbd47"
+  },
+  {
+    "name": "002_web_auth.sql",
+    "checksum": "0d240471014c7626db46e9cb0624b493fa88a098b93f6337dfd1264359965e41"
+  }
+]

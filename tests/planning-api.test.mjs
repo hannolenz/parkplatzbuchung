@@ -4,7 +4,7 @@ import { authorizePlanningRequest, planningRoute, readPlanningJson } from '../li
 function request(method = 'POST', body = '{}', headers = {}) {
   return new Request('http://localhost:3001/api/bookings', { method, headers: { 'content-type': 'application/json', ...(method !== 'GET' ? { origin: 'http://localhost:3001' } : {}), ...headers }, ...(method !== 'GET' ? { body } : {}) });
 }
-test('planning routes are local-only; GET works without Origin but writes require it', () => {
+test('origin guard fails closed for unconfigured online hosts; writes require Origin', () => {
   assert.doesNotThrow(() => authorizePlanningRequest(request('GET'), {}));
   assert.doesNotThrow(() => authorizePlanningRequest(request(), {}));
   assert.throws(() => authorizePlanningRequest(request('POST', '{}', { origin: '' }), {}), { status: 403 });
@@ -18,14 +18,14 @@ test('invalid JSON, wrong content type and oversized input rejected', async () =
   await assert.rejects(readPlanningJson(request('POST', 'x'.repeat(17000))), { status: 413 });
 });
 test('database errors never expose connection strings and responses are not cached', async () => {
-  const route = planningRoute(() => { throw new Error('postgres://user:fake-password@private.invalid/db'); });
+  const route = planningRoute(() => { throw new Error('postgres://user:fake-password@private.invalid/db'); }, { authenticate: async () => {} });
   const response = await route(request());
   assert.equal(response.status, 503);
   assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.ok(!(await response.text()).includes('fake-password'));
 });
 test('unique conflicts receive safe 409 response', async () => {
-  const route = planningRoute(() => { const error = new Error('private SQL'); error.code = '23505'; throw error; });
+  const route = planningRoute(() => { const error = new Error('private SQL'); error.code = '23505'; throw error; }, { authenticate: async () => {} });
   assert.equal((await route(request())).status, 409);
 });
 
