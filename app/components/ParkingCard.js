@@ -42,13 +42,20 @@ export default function ParkingCard() {
     if(!suggested || checkedDate!==date){setState({status:'error',message:'Bitte die Verfügbarkeit für dieses Datum zuerst neu prüfen.'});return;}
     const text=`${formatDate(date)}, ${slot==='morning'?'07:00–12:30 Uhr':'13:00–15:00 Uhr'}, Säule ${suggested.number}`;
     if(!window.confirm(`Jetzt wirklich reservieren?\n\n${text}`)) return;
-    setState({status:'working',message:`Reservierung für Säule ${suggested.number} wird ausgeführt …`});
+    const expectedStation=suggested.number;
+    setSuggested(null); setStations([]); setCheckedDate(null);
+    setState({status:'working',message:`Reservierung für Säule ${expectedStation} wird ausgeführt …`});
     try{
-      const r=await fetch('/api/parking/reserve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload({confirm:true,expectedStation:suggested.number}))});
-      const d=await r.json(); if(!r.ok||!d.ok) throw new Error(d.message||'Reservierung fehlgeschlagen.');
+      const r=await fetch('/api/parking/reserve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload({confirm:true,expectedStation}))});
+      const d=await r.json();
+      if(d.outcome==='unknown'){
+        setState({status:'error',message:`${d.message} Diagnose-ID: ${d.diagnosticId}`});
+        return;
+      }
+      if(!r.ok||!d.ok) throw new Error(d.message||'Reservierung fehlgeschlagen.');
       setState({status:'success',message:`Reserviert: ${formatDate(date)}, ${d.slotLabel}, Säule ${d.station}. ${d.verification}`});
       setSuggested(null); setStations([]);
-    }catch(e){setState({status:'error',message:e.message});}
+    }catch(e){setState({status:'error',message:`${e.message} Vor einem weiteren Buchungsversuch bitte direkt bei ERGO prüfen.`});}
   }
 
   return <article className="card parkingCard wideCard">
@@ -65,7 +72,7 @@ export default function ParkingCard() {
     <div className={`result ${state.status}`}><span className="dot"/><span>{state.message}</span></div>
     {stations.length>0&&<div className="availability"><strong>Auswahl für {formatDate(date)}</strong><span>{stations.filter(s=>s.free).length} von {stations.length} Säulen frei</span><div className="suggestion">{suggested?<>Vorgeschlagene Säule: <b>{suggested.number}</b></>:'Keine passende freie Säule gefunden.'}</div></div>}
     <div className="buttonRow three"><button className="secondaryButton" onClick={testLogin} disabled={state.status==='working'}>Login testen</button><button className="secondaryButton" onClick={checkAvailability} disabled={state.status==='working'}>Verfügbarkeit prüfen</button><button className="primaryButton" onClick={reserve} disabled={state.status==='working'||!suggested}>Jetzt reservieren</button></div>
-    <p className="safeNote">Vor jeder echten Reservierung erscheint eine Bestätigung mit Datum, Zeitslot und Säule. Eine automatische zeitgesteuerte Buchung ist noch nicht eingerichtet.</p>
+    <p className="safeNote">Vor jeder echten Reservierung erscheint eine Bestätigung mit Datum, Zeitslot und Säule. Der Buchungserfolg muss derzeit direkt bei ERGO geprüft werden. Ungeklärte Versuche sperren weitere Buchungen desselben Datums und Zeitslots. Eine automatische zeitgesteuerte Buchung ist noch nicht eingerichtet.</p>
   </article>;
 }
 function formatDate(iso){if(!iso)return '–';const [y,m,d]=iso.split('-');return `${d}.${m}.${y}`;}
