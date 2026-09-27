@@ -59,3 +59,25 @@ code { color:var(--ink); }
 .grid.single{grid-template-columns:1fr}.wideCard{max-width:820px}.formGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:24px 0 14px}.formGrid label,.field{display:flex;flex-direction:column;gap:7px;font-size:13px;font-weight:700}.formGrid input,.formGrid select,.field input{border:1px solid var(--line);border-radius:12px;padding:12px;background:#fff;color:var(--ink);font:inherit}.field small{font-weight:400;color:var(--muted)}.checkRow{display:flex;gap:9px;align-items:center;margin:16px 0;font-size:13px;color:var(--muted)}.availability{border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px;display:grid;gap:5px;font-size:13px}.availability span{color:var(--muted)}.suggestion{margin-top:5px}.buttonRow{display:grid;grid-template-columns:1fr 1.4fr;gap:10px}.secondaryButton{border:1px solid var(--line);border-radius:14px;padding:14px 16px;background:#fff;color:var(--ink);cursor:pointer;font-weight:700}.safeNote{font-size:12px!important;margin-top:12px!important}@media(max-width:760px){.formGrid,.buttonRow{grid-template-columns:1fr}}
 
 .buttonRow.three{grid-template-columns:1fr 1.2fr 1.2fr}@media(max-width:760px){.buttonRow.three{grid-template-columns:1fr}}
+
+.planningCard { padding: 26px; }
+.planningHeading { display: flex; justify-content: space-between; gap: 16px; align-items: center; margin-bottom: 16px; }
+.planningHeading h2 { margin: 0; }
+.planningHint { padding: 14px; margin: 16px 0 !important; background: var(--accent-soft); border-radius: 12px; line-height: 1.5; }
+.planningHint p { margin: 4px 0; }
+.planningCard fieldset { border: 1px solid var(--line); border-radius: 16px; margin: 24px 0; padding: 16px; }
+.planningCard legend { font-weight: 700; padding: 0 8px; }
+.planningActions { display: flex; gap: 12px; }
+.planningActions .primaryButton { width: auto; }
+.planningTableWrap { overflow-x: auto; margin-top: 24px; }
+.planningTable { border-collapse: collapse; width: 100%; font-size: 13px; line-height: 1.6; }
+.planningTable caption { text-align: left; color: var(--muted); padding: 8px 0; }
+.planningTable th, .planningTable td { text-align: left; vertical-align: top; padding: 12px 10px; border-bottom: 1px solid var(--line); }
+.planningTable small { color: var(--muted); }
+.planningRowActions { display: grid; gap: 8px; }
+.planningRowActions button { padding: 8px 10px; }
+button:disabled { opacity: .5; cursor: not-allowed; }
+.manualTools { margin-top: 32px; }
+.manualTools summary { cursor: pointer; font-weight: 700; }
+.manualTools > p { color: var(--muted); line-height: 1.5; }
+@media(max-width:760px) { .planningHeading, .planningActions { flex-direction: column; align-items: stretch; } .planningCard { padding: 18px; } }
