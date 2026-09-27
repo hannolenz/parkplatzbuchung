@@ -1,0 +1,69 @@
+# Environment and local credentials (also backups)
+.env
+.env.*
+*.env
+*.env.*
+.npmrc
+.pypirc
+.netrc
+
+# Browser sessions, profiles and local application data
+.data/
+.auth/
+playwright/.auth/
+sessions/
+browser-sessions/
+browser-profile/
+browser-profiles/
+user-data-dir/
+*session*.json*
+*storage-state*.json*
+*storageState*.json*
+*cookies*.json*
+
+# Credentials, private keys and local secret files
+secrets/
+credentials/
+*credentials*.json*
+*secret*.json*
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+
+# Dependencies and build output
+node_modules/
+.next/
+out/
+build/
+dist/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+
+# Browser diagnostics may contain session or page data
+playwright-report/
+playwright-results/
+test-results/
+blob-report/
+traces/
+screenshots/
+videos/
+*.har
+*.log
+
+# Local deployment settings, archives, editor and OS files
+.vercel/
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.bak
+*.swp
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
