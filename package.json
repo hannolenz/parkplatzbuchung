@@ -9,9 +9,11 @@
     "start": "next start",
     "postinstall": "node scripts/install-browser.mjs",
     "db:migrate": "node --env-file=.env.local scripts/migrate.mjs",
-    "worker:dry-run": "node --env-file=.env.local worker/dry-run.mjs",
+    "worker:dry-run": "node worker/dry-run.mjs",
     "auth:hash": "node scripts/hash-app-password.mjs",
-    "db:manifest": "node scripts/update-migration-manifest.mjs"
+    "db:manifest": "node scripts/update-migration-manifest.mjs",
+    "worker:start": "node worker/run.mjs",
+    "worker:admin": "node worker/admin-cli.mjs"
   },
   "dependencies": {
     "@vercel/functions": "3.9.9",

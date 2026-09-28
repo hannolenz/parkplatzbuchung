@@ -2,15 +2,15 @@
 
 Private Next.js-Webanwendung zur Planung von Parkplatzbuchungen. Technischer Name: `parkplatzbuchung`.
 
-**Phase 2B bereitet den privaten Onlinebetrieb vor. Noch kein Deployment, kein Scheduler, kein produktiver Worker und keine automatische Reservierung.** Die Oberfläche zeigt diesen Zustand ausdrücklich an. Geplante Buchungen lassen sich nach Anmeldung anlegen, ändern, stornieren und einsehen. Es gibt keinen Web-Endpunkt zum Starten des Workers.
+**Phase 3A bereitet einen dauerhaft laufenden, ausschließlich simulierenden Worker vor. Der bestehende Webbetrieb auf Vercel/Neon wurde vom Betreiber bestätigt; in Phase 3A wird nichts deployt oder produktiv migriert. Keine echte automatische Reservierung.** Die Oberfläche zeigt diesen Zustand ausdrücklich an. Geplante Buchungen lassen sich nach Anmeldung anlegen, ändern, stornieren und einsehen. Es gibt keinen Web-Endpunkt zum Starten des Workers.
 
 ## Architektur
 
 ```text
 Browser → Next.js 16 / Login / Planung / Status → zentrale PostgreSQL-Datenbank
           später Vercel                            ↑
-                                                  separater 24/7-Worker (später)
-                                                  Playwright + ERGO-Session
+                                                  separater 24/7-Worker (Phase 3A: Dry Run)
+                                                  Playwright + ERGO-Session erst in späterer Phase
 ```
 
 Die Web-App verwendet nur ihre eigenen Login-Einstellungen und PostgreSQL. **ERGO-Zugangsdaten gehören später ausschließlich auf den Worker, nicht in die Vercel-Web-App.** Die drei bisherigen `/api/parking/*`-Routen liefern jetzt grundsätzlich 403 und importieren keinen Playwright-Adapter mehr. Auch angemeldete Benutzer können darüber keine Browseraktion auslösen. Der vorhandene Automatisierungskern bleibt für eine spätere gezielte Worker-Anbindung erhalten; seine funktionale Logik wurde in Phase 2B nicht verändert.
@@ -54,7 +54,8 @@ Fehlerantworten enthalten keine Stacktraces, SQL-Details, Verbindungszeichenfolg
 | Späterer Worker | `PARKING_URL` | ERGO-Buchungsseite |
 | Späterer Worker | `PARKING_USERNAME`, `PARKING_PASSWORD` | Ausschließlich beim Worker speichern |
 | Späterer Worker | `PLAYWRIGHT_HEADLESS` | Chromium-Modus |
-| Dry-run/Worker | `WORKER_ID` | Nicht geheime technische Kennung |
+| Dry-run/Worker | `WORKER_ID` | Pflicht: eindeutige nicht geheime technische Kennung |
+| Dry-run/Worker | `WORKER_MODE` | Pflicht: exakt `dry-run`; `live` wird technisch abgewiesen |
 
 Keine dieser sensiblen Variablen als `NEXT_PUBLIC_*` anlegen. Ein Passwort darf weder als Kommandozeilenargument noch in Shell-History stehen. Das Hashformat verwendet bewusst Doppelpunkte statt Dollarzeichen, damit Next.js `.env.local` nicht als Variableninterpolation interpretiert.
 
@@ -105,7 +106,7 @@ npm run db:migrate
 
 Das versionierte `lib/db/migration-manifest.json` ermöglicht den Health-Check ohne Dateisystemabhängigkeit im Serverless-Bundle. Ein Test prüft die exakten SQL-Prüfsummen. Für Migrationen einen direkten DB-Endpunkt mit eigenem DDL-Benutzer verwenden; dazu `DATABASE_URL` im separaten Migrationsprozess passend setzen. Später getrennte Rollen für Web-App (Planung/Sessions/Limit sowie lesender Migrationsstatus), Worker und Migrationen. Der Web-Benutzer benötigt keine DDL-Rechte und keine Schreibrechte auf `booking_attempts`.
 
-`GET /api/system/status` ist sessiongeschützt und zeigt nur: Web erreichbar, DB erreichbar/nicht erreichbar, Migrationen aktuell/nicht aktuell/nicht prüfbar, Worker inaktiv. Keine Hostnamen, Versionen, Checksummen oder Verbindungsdaten. Es wird kein Worker kontaktiert. **Bei DB-Ausfall kann schon die Sessionprüfung scheitern:** Dann bleibt der Statuszugriff gesperrt und die UI zeigt eine allgemeine Nichtverfügbarkeit. Das ist bewusst kein öffentliches Diagnose-Hintertürchen. Vollständige DB-Ausfälle müssen zusätzlich über private Infrastrukturüberwachung untersucht werden.
+`GET /api/system/status` ist sessiongeschützt und zeigt nur: Web erreichbar, DB erreichbar/nicht erreichbar, Migrationen aktuell/nicht aktuell/nicht prüfbar, Workerzustand einschließlich letzter Heartbeat, Modus, technische Version/Commit, letzter erfolgreich simulierter Auftrag und fest definierter Fehlercode. Keine DB-Hostnamen, Schema-Checksummen oder Verbindungsdaten. Der Status wird aus PostgreSQL gelesen; es gibt keinen Steuerungsaufruf an den Worker. **Bei DB-Ausfall kann schon die Sessionprüfung scheitern:** Dann bleibt der Statuszugriff gesperrt und die UI zeigt eine allgemeine Nichtverfügbarkeit. Das ist bewusst kein öffentliches Diagnose-Hintertürchen. Vollständige DB-Ausfälle müssen zusätzlich über private Infrastrukturüberwachung untersucht werden.
 
 ## Planung, Termine und Datenmodell
 
@@ -122,15 +123,107 @@ Private Routen: `GET/POST /api/bookings`, `PATCH/DELETE /api/bookings/:id`. Eing
 
 Statusmodell: `planned → preparing → running → booked | failed | unknown`; vor Start `planned → cancelled`. Fehler und unbekannte Ergebnisse werden nicht automatisch neu gestartet. `booked` bleibt ohne belegtes ERGO-Erfolgssignal unzulässig. Constraints verhindern doppelte aktive Datum-/Slot-Pläne, doppelte Versuche pro Planversion/Modus und mehr als einen zukünftigen Live-Versuch pro Plan.
 
-## Dry-run und späterer Worker
+## Phase 3A: dauerhaft betreibbarer Dry-run-Worker
+
+Der Worker benötigt **keine ERGO-Zugangsdaten und keinen Browser**. Seine Importkette enthält keinen Playwright-/ERGO-Adapter. `WORKER_MODE` muss ausdrücklich `dry-run` sein; fehlender Wert, `live` oder andere Werte beenden den CLI-Prozess bereits **vor dem DB-Zugriff**. Auch der bisherige Einmalbefehl erzwingt diese Prüfung. Das Setzen von `live` allein aktiviert keinerlei echte Ausführung. Die vorhandenen manuellen Web-Routen bleiben gesperrt.
+
+Start mit bereits gesetzter Worker-Umgebung:
+
+```bash
+npm run worker:start
+```
+
+Einmalige Simulation, höchstens ein fälliger Auftrag:
 
 ```bash
 npm run worker:dry-run -- --once
 ```
 
-Nur ein lokaler CLI-Prozess, **kein Browser-Endpunkt**. Ein Aufruf claimt höchstens einen fälligen Plan per Transaktion mit `FOR UPDATE SKIP LOCKED`, protokolliert vorgesehene Parameter und beendet die Simulation. Keine Auswahl einer real verfügbaren Säule, kein Playwright, kein ERGO, kein Scheduler. Der Plan bleibt danach `planned` mit ausdrücklichem Simulationshinweis; der Versuch wird `simulated`. Dieselbe Planversion wird nicht erneut simuliert. Abschließen ist idempotent und an den Besitzer gebunden. Ein Dry-run darf niemals `booked` werden.
+Die Worker-Skripte laden nicht mehr automatisch die lokale `.env.local` mit Web-/ERGO-Daten. Für eine explizite, separate lokale Testkonfiguration:
 
-Bei Absturz bleibt `preparing`/`running` bestehen. Vor einem produktiven 24/7-Worker fehlen sichere Wiederanlauf-/Übernahmeregeln, Überwachung und Zeitabgleich. Externe Exactly-once-Wirkung lässt sich nicht allein durch DB-Claims garantieren; ein unklarer Zustand nach einem echten Klick muss `unknown` bleiben und darf keinen Retry auslösen. PGlite testet SQL/Constraints, ersetzt aber keinen Mehrprozess-Claim-Test mit echtem PostgreSQL.
+```bash
+node --env-file=/pfad/zur/worker.env worker/run.mjs --once
+```
+
+**Diese Befehle wurden nicht gegen die produktive Datenbank ausgeführt.** Der vorhandene produktive Testplan für den 01.10.2026 wurde weder verändert noch geclaimt. Sobald später ein Worker mit produktiver DB startet, simuliert er alle fälligen, noch nicht simulierten Pläne. Vor diesem Start die Warteschlange prüfen.
+
+### Zeitsteuerung und Neustart
+
+- `scheduled_execution_at` bleibt der gespeicherte UTC-Zeitpunkt aus „Vortag 00:01 Europe/Berlin“. Keine neue Datumsrechnung im Worker und keine UTC-Subtraktion von 24 Stunden.
+- PostgreSQL liefert die verbleibende Zeit bis zum nächsten fälligen Plan. Der Worker verwendet diese Differenz und monotone Laufzeitmessung, nicht die lokale VPS-Wanduhr.
+- Ohne nahe Aufträge höchstens 30 Sekunden bis zur nächsten Abfrage. Für bekannte Termine wacht der Prozess spätestens fünf Sekunden vorher auf; im Nahbereich werden 25–250 Millisekunden gewartet. Gemessene DB-Roundtrip-Zeit wird konservativ abgezogen.
+- Ein Claim ist erst zulässig, wenn die **Datenbankzeit** den Termin erreicht hat. Keine vorzeitige Simulation. Nach einem Neustart werden bereits fällige Pläne sofort geprüft; es wird nicht auf die nächste volle Minute gewartet.
+- Neue oder kurzfristig vorverlegte Pläne können während einer langen Wartephase bis zu 30 Sekunden unentdeckt bleiben. Für den späteren kurzfristigen Integrationstest deshalb standardmäßig 60 Sekunden Vorlauf verwenden. Vorher bekannte Termine werden gezielt zeitnah bedient.
+- Dies ist keine Echtzeitgarantie: Netzwerk, PostgreSQL-Cold-Start, Prozesslast und Ausfallzeiten verursachen Verzögerungen. Die tatsächliche Latenz muss auf dem späteren VPS gemessen werden. Vor Livebetrieb sind zusätzlich Browser-/Login-Vorbereitung und eine verbindliche Policy für stark verspätete Aufträge erforderlich. Dry Runs dürfen überfällige Pläne simulieren.
+
+### Claims, Leases und Idempotenz
+
+Ein Auftrag wird mit `FOR UPDATE SKIP LOCKED` atomar gesperrt, ein UUID-Attempt angelegt und der Plan auf `preparing` gesetzt. Verarbeitung erfolgt pro Prozess seriell, höchstens ein laufender Job. Die bisherigen eindeutigen Indizes bleiben bestehen: ein Versuch pro Planversion/Modus, ein aktiver Versuch pro Plan, höchstens ein zukünftiger Live-Versuch pro Plan.
+
+Jeder Prozess hat zusätzlich zur stabilen `WORKER_ID` eine zufällige Instanz-ID. Zwei aktive Prozesse mit derselben Worker-ID werden abgewiesen; eine seit 60 Sekunden nicht mehr gemeldete Instanz darf ersetzt werden. Die alte Instanz verliert ihre Schreibberechtigung. Claims haben eine **120-Sekunden-Lease**; Heartbeats erneuern nur noch gültige Leases. Abgelaufene Claims können nicht durch einen verspäteten Prozess wiederbelebt werden. Start, kritischer Simulationsmarker und Abschluss prüfen Besitzer, Instanz, Lease und Status unter Transaktion erneut.
+
+Erfolg der Simulation: Plan `planned` mit `dry_run_completed_at` und ausdrücklichem Ergebnistext; Attempt `simulated`, Phase `completed`. Ein Abschluss wird idempotent behandelt. Neustart allein erzeugt keinen weiteren Versuch derselben Planversion. Der letzte erfolgreiche Auftrag wird gemeinsam mit dem Simulationsabschluss in derselben Transaktion gespeichert. **Kein Dry Run schreibt `booked`.**
+
+### Wiederanlauf und kritischer Punkt
+
+| Situation | Zustand/Policy |
+| --- | --- |
+| A: nachweislich vor kritischem Punkt | `failed`, Retry grundsätzlich zulässig, aber ausschließlich explizit freigegeben |
+| B: während/nach kritischem Punkt ohne eindeutigen Nachweis | `unknown`, kein automatischer und kein CLI-Retry; menschliche Prüfung |
+| C: eindeutig bestätigter Erfolg | In Phase 3A nur `simulated`; später bei belegtem ERGO-Signal `booked` |
+| D: eindeutig bestätigter Misserfolg ohne Reservierung | Reine zukünftige Policy erlaubt kontrollierten Retry; in Phase 3A kein Live-Nachweis und kein entsprechender Executor |
+
+Die Entscheidung ist als reine Funktion getestet. Der Dry-run-Executor speichert vor dem simulierten kritischen Punkt die Phase `critical`; selbst eine unklare Bestätigung dieses DB-Schreibens kann daher keinen unbemerkten Retry erlauben. Es wird kein Reservierungsklick simuliert, indem eine Website bedient wird: die eigentliche Simulation ist eine leere lokale Funktion. Testfehler werden ausschließlich über Testdoubles injiziert.
+
+Bei einem harten Absturz findet die nächste Bereinigung abgelaufene `preparing`/`running`-Attempts. Sie prüft höchstens alle 30 Sekunden bis zu 20 Einträge pro Lauf. Vor kritischem Punkt: `failed`, sonst `unknown`. Bestehende alte Attempts bekommen `legacy_unknown`; ihr unbekannter Ablauf wird niemals als sicherer Vor-Klick-Fehler interpretiert. Nur Dry-run-Claims werden automatisch klassifiziert, keine Live-Claims.
+
+Retry wird nicht automatisch ausgelöst. Das lokale Admin-CLI akzeptiert nur `failed` + `before_critical` + `retry_eligible`, prüft die erwartete Planversion und erlaubt höchstens **drei Gesamtversuche**. Es erhöht die Version, erhält das alte Attempt-Journal und markiert den Plan dauerhaft als Dry-run-only. Beispiel mit bewusst einzusetzender UUID und aktueller Version:
+
+```bash
+npm run worker:admin -- retry-before-critical BOOKING_UUID PLAN_VERSION --confirm-dry-run
+```
+
+Der bestehende Index `one_live_attempt_per_booking` bleibt bewusst unverändert und erlaubt weiterhin höchstens einen Live-Attempt je Plan. Die reine zukünftige Live-Retry-Policy aktiviert daher noch keinen Live-Retry; eine sichere Umsetzung samt Schemaentscheidung gehört in Phase 3B.
+
+Für `unknown`, alte ungeklärte Attempts und spätere echte Live-Fehler existiert kein Entsperr-Endpunkt. Keine direkten manuellen Statuskorrekturen auf Verdacht. Vor Livebetrieb muss die bestehende lokale Buchungsmarker-Logik zusätzlich angebunden und ein belastbarer ERGO-Erfolgsnachweis etabliert werden. DB-Idempotenz allein garantiert keine Exactly-once-Wirkung bei einem externen System.
+
+### Heartbeat und geschützter Status
+
+`worker_instances` speichert Worker-ID, Instanz, Modus, Version/Commit, Zustand, Startzeit, letzten Heartbeat, letzten abgeschlossenen Dry Run und ausschließlich feste Fehlercodes. Während längerer Operationen läuft ein unabhängiger Heartbeat alle 15 Sekunden; zusätzliche Statusaktualisierungen erneuern ihn ebenfalls. Nach 60 Sekunden ohne Meldung zeigt die Oberfläche „nicht verbunden“, bei aktuellen Fehlern „gestört“. Ein sauber gestoppter Worker ist nicht verbunden, behält aber seine letzte Erfolgsinformation.
+
+Die bestehende **authentifizierte** Route `/api/system/status` liest diese Daten. Die UI zeigt Modus und letzten Heartbeat in Berlin an, ohne Start-/Reservierungsbutton. Ein eventuell als Live gemeldeter Datensatz wird in Phase 3A als nicht unterstützter/gestörter Zustand angezeigt, niemals als aktivierte echte Automatik. `automaticExecution` bleibt `false`. Fehlt die neue Tabelle, wird der Workerstatus als nicht verfügbar ausgegeben, nicht öffentlich diagnostiziert.
+
+### Migration 003 und produktive Daten
+
+`003_worker_runtime.sql` ergänzt ausschließlich Felder/Tabelle/Indizes/Schutztrigger; Migrationen 001/002 und vorhandene Pläne/Auth-Sessions bleiben erhalten. Neue Attempt-Felder: `execution_phase`, `lease_until`, `heartbeat_at`, `worker_instance_id`, `retry_eligible`. Neue Planfelder: `dry_run_only` und `dry_run_original_execution_at`.
+
+Das Migrationsmanifest ist aktualisiert. Die Migration wurde nur in PGlite-Tests angewendet, **nicht auf Neon**. Reihenfolge für den später freigegebenen Rollout: Backup/Rechte prüfen → Migration 003 → aktualisierte Web-App → kontrollierter Workerstart. Die alte Web-App kann die zusätzlichen Spalten ignorieren; ihr älterer Health-Check zeigt bis zum Web-Update wegen des zusätzlichen Migrationsstands „nicht aktuell“. Alte Einmalworker dürfen beim Rollout nicht parallel weiterlaufen, weil sie noch keine Instanz-/Lease-Prüfung besitzen.
+
+### Sicherer kurzfristiger Testauftrag
+
+Nur lokales CLI mit Worker-DB-Zugang und expliziter Bestätigung, keine HTTP-Steuerung. Für einen **separaten unversuchten Testplan**:
+
+```bash
+npm run worker:admin -- make-due BOOKING_UUID PLAN_VERSION --confirm-dry-run 60
+```
+
+Der Aufruf prüft UUID, Version, `planned` und das Fehlen jedes bisherigen Attempts, speichert den ursprünglichen Termin und setzt die Fälligkeit auf DB-Zeit + 60 Sekunden (zulässig 0–300). `dry_run_only=true` ist danach durch DB-Trigger unumkehrbar; ein Live-Attempt und `booked` sind für diesen Plan gesperrt. Auch ein späterer Live-Worker muss diese Kennzeichnung beachten. Einen normalen Plan für einen echten Parktag nicht versehentlich als Testplan verwenden. Nach dem Test kann ein noch `planned`-Plan über die Web-App storniert werden.
+
+Späterer Nachweis: Plan anlegen → UUID/Version prüfen → CLI-Testfreigabe → Heartbeat/Claim/Attempt/Simulation in Neon → Ergebnis/Workerstatus in Web-App. Keiner dieser Schritte wurde in Phase 3A produktiv ausgeführt.
+
+### Linux-/systemd-Vorbereitung
+
+Vorlagen: `deploy/worker.env.example` und `deploy/parkplatzbuchung-worker.service`. Noch kein VPS ausgewählt oder konfiguriert. Voraussetzungen: Linux mit systemd, Node >=22, dedizierter unprivilegierter Benutzer, Repo unter `/opt/parkplatzbuchung`, Node-Pfad prüfen. Installation für diesen Worker ohne Browserdownload:
+
+```bash
+npm ci --omit=dev --ignore-scripts
+```
+
+Separates Environment unter `/etc/parkplatzbuchung/worker.env`, root:root, Modus 0600; systemd liest es vor dem Benutzerwechsel. Benötigt werden `DATABASE_URL` (ohne verbotene `ssl*`-Parameter), `DATABASE_SSL=verify-full`, `WORKER_ID`, `WORKER_MODE=dry-run`. Optional Pool-Maximum 3, private CA und `WORKER_VERSION` mit tatsächlichem Git-Commit. **Keine PARKING-Zugangsdaten und keine APP_AUTH-Zugangsdaten.** Vercel erhält weiterhin keine Worker-/ERGO-Secrets.
+
+Der Service verwendet `Restart=on-failure`, fünf Sekunden Neustartabstand und höchstens 30 Starts pro 300 Sekunden. Das überbrückt die 60-Sekunden-Sperre einer nach hartem Absturz noch frisch gemeldeten Worker-ID, ohne zuvor ins Startlimit zu laufen. Hinzu kommen SIGTERM und 45 Sekunden Stop-Frist sowie Dateisystem-/Benutzer-Isolation. SIGTERM/SIGINT unterbrechen Wartezeiten, verhindern neue Claims und lassen einen bereits kritischen Dry Run kontrolliert abschließen. Bei Signal vor dem kritischen Punkt wird der Claim sicher beendet; Datenbankverbindungen und Listener werden aufgeräumt. Bei SIGKILL/Stromausfall übernehmen Lease-Erkennung und die konservative Wiederanlaufpolicy. Fehlgeschlagene Zyklen verwenden einen Backoff von 1 bis maximal 30 Sekunden; sie wiederholen keinen gescheiterten Job automatisch.
+
+Systemd-Unit erst auf dem späteren Zielhost prüfen und erst nach Freigabe installieren/starten. Noch offen: echte PostgreSQL-Mehrprozessprüfung (`SKIP LOCKED`/Instanzwechsel), Vercel-Neon-VPS-Gesamttest, Latenzmessung, Rollen/Rechte, NTP, Ressourcenlimits, Monitoring und systemd-Verifikation. PGlite serialisiert Transaktionen und ersetzt diese Betriebsprüfung nicht.
 
 ## Deployment-Vorbereitung – noch nicht ausgeführt
 
@@ -140,7 +233,7 @@ Bei Absturz bleibt `preparing`/`running` bestehen. Vor einem produktiven 24/7-Wo
 4. Später Vercel-Projekt als Next.js/Node-Anwendung einrichten: `npm ci`, `npm run build`. Nur Web-/Planungsvariablen hinterlegen, **keine PARKING-Zugangsdaten**. Browserinstallation wird auf Vercel übersprungen.
 5. Erst nach ausdrücklichem Deploymentauftrag veröffentlichen. Danach HTTPS/Secure-Cookie, Login/Logout, CSRF, Sessionablauf, private Routen, DB/TLS/Pooler, Migrationsstatus und Last-Limits prüfen. Der echte Worker bleibt weiterhin inaktiv.
 
-Noch offen: echte Infrastrukturprüfung und Deployment-Freigabe, produktiver Worker, Wiederanlaufstrategie und ein eindeutig belegtes ERGO-Erfolgssignal. Authentifizierung ist implementiert, aber noch nicht gegen eine reale Vercel-/PostgreSQL-Installation getestet. Kein MFA/Passwortreset; bei Verlust des Web-Passworts Hash über den Betreiberzugang ersetzen.
+Für die späteren Schritte bleiben reale Infrastruktur-/Rolloutprüfungen, produktive Live-Ausführung und ein eindeutig belegtes ERGO-Erfolgssignal offen. Die Dry-run-Wiederanlaufstrategie ist in Phase 3A implementiert. Authentifizierung ist implementiert, aber noch nicht gegen eine reale Vercel-/PostgreSQL-Installation getestet. Kein MFA/Passwortreset; bei Verlust des Web-Passworts Hash über den Betreiberzugang ersetzen.
 
 ## Tests und Git-Sicherheit
 
@@ -154,6 +247,6 @@ git diff --check
 
 Tests verwenden synthetische Zugangsdaten, lokale PGlite-Datenbanken und Testdoubles. Die bestehenden Chromium-Tests arbeiten ausschließlich mit synthetischem HTML und blockieren das Netzwerk. Kein Test löst eine echte Reservierung oder ERGO-Sitzung aus. Kein Lint-Skript vorhanden.
 
-`.gitignore` schützt `.env.local`, sonstige `.env*`, `.data`, Sessions, Diagnosen, Screenshots, Schlüssel, `node_modules` und `.next`. Einzige Ausnahme: die geprüfte, geheimnisfreie `.env.example`. Git-Ignore verhindert weder `git add -f` noch versehentliche Secrets in Quelltexten; vor Commit zusätzlich den tatsächlichen Index prüfen. Kein Auth-Hash, Session-Token oder echtes Login in Tests/Logs/README eintragen.
+`.gitignore` schützt `.env.local`, sonstige `.env*`, `.data`, Sessions, Diagnosen, Screenshots, Schlüssel, `node_modules` und `.next`. Ausnahmen sind ausschließlich die geprüften, geheimnisfreien `.env.example` und `deploy/worker.env.example`. Git-Ignore verhindert weder `git add -f` noch versehentliche Secrets in Quelltexten; vor Commit zusätzlich den tatsächlichen Index prüfen. Kein Auth-Hash, Session-Token oder echtes Login in Tests/Logs/README eintragen.
 
 Die [Phase-2A-Sicherheitskorrekturen](docs/security-phase2a.md) dokumentieren die behobenen Advisories. [Bisherige Playwright-Diagnose und Buchungsmarker](docs/automation-background.md) bleiben als technische Referenz erhalten, erteilen aber keine Berechtigung zu einer Live-Aktion.

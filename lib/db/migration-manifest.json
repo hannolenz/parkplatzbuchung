@@ -6,5 +6,9 @@
   {
     "name": "002_web_auth.sql",
     "checksum": "0d240471014c7626db46e9cb0624b493fa88a098b93f6337dfd1264359965e41"
+  },
+  {
+    "name": "003_worker_runtime.sql",
+    "checksum": "b6c85fcf6255acfa4eabb5d730e20d8c2704790f84857e65eb5161b04869544a"
   }
 ]

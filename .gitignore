@@ -5,6 +5,7 @@
 *.env.*
 # Only the reviewed, secret-free template may be versioned.
 !/.env.example
+!/deploy/worker.env.example
 .npmrc
 .pypirc
 .netrc

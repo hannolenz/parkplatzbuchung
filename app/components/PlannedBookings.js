@@ -76,7 +76,7 @@ export default function PlannedBookings() {
           <td>{dateLabel(booking.parkingDate)}<br/>{booking.slot === 'morning' ? '07:00–12:30' : '13:00–15:00'}</td>
           <td>{instantLabel(booking.scheduledExecutionAt)}</td>
           <td>{booking.stationPriorities.join(' → ') || 'Beliebige freie Säule'}<br/><small>Fallback: {booking.allowFallback ? 'ja' : 'nein'}</small></td>
-          <td>{statuses[booking.status]}{booking.dryRunCompletedAt && <><br/><small>Simulation abgeschlossen</small></>}<br/><small>Versuche: {booking.attemptCount}</small></td>
+          <td>{statuses[booking.status]}{booking.dryRunOnly && <><br/><small>Dauerhaft nur Dry Run</small></>}{booking.dryRunCompletedAt && <><br/><small>Simulation abgeschlossen</small></>}<br/><small>Versuche: {booking.attemptCount}</small></td>
           <td>{booking.selectedStation || '–'}<br/>{booking.resultMessage || booking.lastError || 'Noch kein Ergebnis'}</td>
           <td><div className="planningRowActions">
             <button className="secondaryButton" disabled={busy || booking.status !== 'planned' || new Date(booking.scheduledExecutionAt) <= new Date()} onClick={() => { setEditing(booking); setForm({ parkingDate: booking.parkingDate, slot: booking.slot, priorities: booking.stationPriorities.join(', '), allowFallback: booking.allowFallback }); }}>Ändern</button>
