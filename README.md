@@ -250,3 +250,78 @@ Tests verwenden synthetische Zugangsdaten, lokale PGlite-Datenbanken und Testdou
 `.gitignore` schützt `.env.local`, sonstige `.env*`, `.data`, Sessions, Diagnosen, Screenshots, Schlüssel, `node_modules` und `.next`. Ausnahmen sind ausschließlich die geprüften, geheimnisfreien `.env.example` und `deploy/worker.env.example`. Git-Ignore verhindert weder `git add -f` noch versehentliche Secrets in Quelltexten; vor Commit zusätzlich den tatsächlichen Index prüfen. Kein Auth-Hash, Session-Token oder echtes Login in Tests/Logs/README eintragen.
 
 Die [Phase-2A-Sicherheitskorrekturen](docs/security-phase2a.md) dokumentieren die behobenen Advisories. [Bisherige Playwright-Diagnose und Buchungsmarker](docs/automation-background.md) bleiben als technische Referenz erhalten, erteilen aber keine Berechtigung zu einer Live-Aktion.
+
+## Phase 3B.1: browserfreier, ausschließlich lesender HTTP-Adapter
+
+Der neue Adapter liegt in `lib/ergo-http/`. Er importiert weder Playwright noch den bisherigen Buchungsadapter. `domain.mjs` enthält reine Datums-/Antwort-/Intervalllogik; `policy.mjs` prüft Requests ohne selbst Netzwerkzugriff anzubieten; `client.mjs` kapselt Transport und Cookie-Jar. Bestehende Playwright-Funktionen bleiben unverändert. Kein Reservierungs-/Stornierungsverfahren und kein Erfolgspfad zu `booked` wurden ergänzt.
+
+### HTTP, Login und Sicherheit
+
+Node.js >=22, integriertes `fetch`, **tough-cookie 6.0.2** für RFC-konforme Cookies und **cheerio 1.2.0** (`cheerio/slim`) für HTML-Formulare. Keine Skriptausführung und kein Browser erforderlich. Cookies/Passwort bleiben im Prozessspeicher; `close()` leert Jar und Zugangsdatenreferenzen. Keine Sessiondateien, Rohantworten oder Diagnosen werden geschrieben. Keine Web-API und keine DB-Verbindung werden für die HTTP-Vorschau eingerichtet.
+
+Vor jedem Request einschließlich Redirect-Hop gilt die feste HTTPS-Origin und folgende Allowlist:
+
+| Methode | Pfad | Parameter |
+| --- | --- | --- |
+| GET | `/` | keine |
+| GET | `/wp-login.php` | optional `redirect_to`, ausschließlich auf eigene Startseite |
+| POST | `/wp-login.php` | reguläre Formularfelder `log`, `pwd`, `rememberme`, `wp-submit`, `redirect_to`, `testcookie` |
+| GET | `/ergo/data/config.json` | optional numerisches `nocache` |
+| POST | `/ergo/functions/process_return_reservations.php` | ausschließlich `today=true/false` |
+
+Andere Hosts, HTTP statt HTTPS, URL-Zugangsdaten, unbekannte Query-/Formularfelder und sämtliche Schreibendpunkte werden vor `fetch` abgewiesen. Auch Login-Redirects dürfen keinen Buchungsendpunkt erreichen. POST-307/308 wird nicht mit Zugangsdaten wiederholt. Höchstens vier Redirects. Zertifikatsprüfung bleibt aktiv; `NODE_TLS_REJECT_UNAUTHORIZED=0` wird abgewiesen. Keine TLS-Ausnahmen oder eigenen unsicheren Agents.
+
+Pro Hop 15 Sekunden Timeout einschließlich Body, maximal 2 MiB Antwort. Fehler enthalten ausschließlich feste Codes, keine Rohfehler/Causes. API-Antworten mit HTML/Redirect/401/403 gelten als abgelaufene Session. Es gibt keine automatische erneute Anmeldung während einer Verfügbarkeitsabfrage und keine Netzwerk-Retries. Unbekannte Loginfelder (auch ein neu eingeführter Nonce) erfordern eine Anpassung nach erneuter Diagnose; sie werden nicht stillschweigend entfernt. Gleichzeitige Methodenaufrufe auf demselben Client werden mit `CLIENT_BUSY` abgewiesen.
+
+### Datum und Verfügbarkeit
+
+`resolveErgoDay(parkingDate, now, timezone)` erlaubt ausschließlich Europe/Berlin und exakt Heute/Morgen. Kalendertage werden vor der Zeitzonenumrechnung verglichen, nicht durch 24 Stunden Addition am aktuellen Zeitpunkt. Andere Daten und ungültige Kalenderdaten werden abgewiesen. Wenn sich die Heute/Morgen-Zuordnung während einer Abfrage ändert, wird das Ergebnis mit `DAY_CHANGED` verworfen. Der separate reine Guard `assertAutomaticTomorrow` ist für spätere automatische Ausführung vorbereitet; er aktiviert nichts. Die serverseitige Zeitzone/Freigabe unmittelbar nach Mitternacht bleibt praktisch zu bestätigen.
+
+Config und doppelt codierte Belegung werden strikt geprüft. `morgenBuchen=false` sperrt Morgen. Der gewählte Slot muss in der aktuellen Konfiguration vorkommen. Intervallüberlappung: `requestedStart < occupiedEnd && requestedEnd > occupiedStart`. Aneinandergrenzende Intervalle kollidieren nicht; vollständig enthaltene, umschließende und teilweise überlappende Intervalle schon. Alle Reservierungen werden validiert, auch wenn vorher bereits eine Kollision gefunden wurde. Fehlende Säulen, ungültige Zeiten, nichtnumerische Eigentümerkennungen und fehlendes/ungültiges `isCharging` führen zu einem Fehler, niemals zu vermeintlich freien Säulen.
+
+**isCharging:** Das analysierte ERGO-Frontend berechnet Verfügbarkeit anhand von Zeitintervallen, ohne das Feld in diesem Filter zu verwenden. Seine fachliche Bedeutung ist damit nicht bewiesen. Bis zur Klärung wird `isCharging=true` konservativ ausgeschlossen (`CHARGING_UNVERIFIED`), selbst ohne Zeitkollision. `chargingExcluded` macht diese Einschränkung sichtbar; es gibt keinen Schalter zum Übergehen. Für die fachliche Klärung sind Betreiberinformation oder eine autorisierte Beobachtung von Ladezustand und Buchbarkeit erforderlich, keine Probe-Buchung auf Verdacht.
+
+Die Säulenliste kommt vollständig aus der Config. Interne Kennung und sichtbare Säulennummer bleiben getrennt. Die bestehende Funktion `pickStation` entscheidet nach Prioritäten und Fallback; es gibt keine feste Säulenliste im Adapter. Ergebnisse enthalten nur geprüfte Säulenangaben und Status, niemals `user_id` oder Eigentümer-/Reservierungsdaten.
+
+### Session vorbereiten, Vorschau und Worker-Grenze
+
+Öffentliche Clientmethoden: `prepareSession()`, `checkSession()`, `inspectAvailability(input)`, `close()`. Keine generische Requestmethode. Sessionvorbereitung darf vor 00:01 erfolgen; die spätere Abfrage prüft die Session und lädt Config/Belegungen frisch. Keine Verfügbarkeit wird über die Wartezeit hinweg gecacht. Ein abgelaufener Login wird rechtzeitig über explizite Sessionprüfung erkannt. Noch kein automatisches Vorbereitungsfenster oder Live-Scheduler.
+
+`createHttpPreviewService(adapter, { mode: 'dry-run' })` bildet Pläne auf den Adapter ab und bietet `prepareSession`, `readPlan` sowie einen injizierbaren `runJob` für die bestehende Worker-Schnittstelle. Dieser nutzt Claims/Journal weiterhin ausschließlich als Simulation. Die gewählte Säule wird im sicheren Dry-run-Ereignis und Rückgabewert ausgegeben, nicht als gebuchte Säule in die DB geschrieben. Ein Lesefehler wird vor dem simulierten kritischen Punkt klassifiziert. `WORKER_MODE=live` bleibt an allen ausführbaren Worker-Eingängen gesperrt.
+
+Der bisherige Daemon bleibt unverändert ohne HTTP-Import und benötigt weiterhin keine ERGO-Secrets. Die Schnittstelle wird nicht automatisch an produktive Jobs angeschlossen. Der explizite einmalige Vorschaubefehl hat **keinerlei Datenbankimport**:
+
+```bash
+# In einer geschützten Worker-Umgebung: WORKER_MODE=dry-run, WORKER_ID,
+# PARKING_USERNAME und PARKING_PASSWORD setzen. PARKING_URL optional,
+# ausschließlich https://duesseldorf.ergoladesaeulen.de zulässig.
+# Datum bewusst auf ein aktuell zulässiges Heute/Morgen setzen:
+npm run worker:http-preview -- YYYY-MM-DD afternoon 1181,1183,1185 true
+# Alternativ Environment-Datei explizit nur im Worker laden:
+node --env-file=/geschuetzter/pfad/worker.env worker/http-preview.mjs YYYY-MM-DD afternoon 1181,1183,1185 true
+```
+
+Kein Chromium, `PLAYWRIGHT_HEADLESS`, `DATABASE_URL` oder Web-Auth-Secret ist für diese Vorschau erforderlich. Niemals ERGO-Zugangsdaten auf Vercel hinterlegen. Für Installation ohne den bisherigen Chromium-Postinstall gilt weiter `npm ci --omit=dev --ignore-scripts`; der gemeinsame Projektbaum installiert noch Web-/Browserpakete, führt sie beim HTTP-Client jedoch nicht aus. Ein separates minimales Worker-Paket ist vor der NAS-Auslieferung sinnvoll. Keine alten `node_modules` vom Mac auf die NAS kopieren.
+
+### Neon: Kostenanalyse und vorgeschlagene nächste Phase
+
+**Noch keine Änderung an Polling, Heartbeat, Lease oder Recovery.** Der 15-Sekunden-Heartbeat und die höchstens 30 Sekunden auseinanderliegenden Abfragen verhindern praktisch Neons Scale-to-zero nach fünf Minuten Inaktivität. Auch ein lokaler NAS-Worker kann dadurch dauerhafte DB-Compute-Kosten verursachen. Quellen: [Neon Scale-to-zero](https://neon.com/docs/manage/endpoints/), [Long-running Applications](https://neon.com/blog/using-neons-auto-suspend-with-long-running-applications).
+
+Vorschlag für eine separate, getestete Änderung:
+
+1. Ohne aktive Claims ein explizites Schlafmodell mit gespeichertem nächsten Aufwachzeitpunkt, seltener Plansynchronisation (z. B. 10–15 Minuten) und entsprechendem UI-Status einführen. Keine kurzen Heartbeats im Schlaf. Zunächst die maximale Verzögerung neuer/verschobener Pläne fachlich festlegen; ggf. Mindestvorlauf erzwingen. Ein Web-Wakeup ist eine spätere Alternative und benötigt einen gesicherten Kanal.
+2. Bekannte Termine lokal vorhalten, rechtzeitig (z. B. 23:58 Europe/Berlin) aufwachen, DB neu synchronisieren und HTTP-Session vorbereiten. Dabei Änderungen/Stornierungen beachten. Nach Neustart zuerst synchronisieren.
+3. Vor 00:01 DB aufwärmen; im aktiven Fenster aktuelle DB-Zeit, bestehenden atomaren Claim sowie kurze Heartbeats/Leases beibehalten. Niemals einen Liveauftrag nur aus lokalem Cache ausführen.
+4. Schlafende Worker von abgestürzten aktiven Workern unterscheiden. Die heutigen 60-Sekunden-Stale-/120-Sekunden-Lease-Regeln dürfen nicht lediglich durch längere Sleeps umgangen werden. Während aktiver Claims niemals in DB-Schlaf wechseln.
+
+Dafür sind Schema-/Health-Anpassungen, Neustart-/Netzwerkausfalltests und Latenzmessungen notwendig. Eine rein seltener ausgeführte Abfrage ohne diese Maßnahmen wäre keine sichere Kostenoptimierung. Kein dauerhaftes LISTEN/NOTIFY als ungeprüfte Scale-to-zero-Lösung.
+
+### Offene Punkte und Verifikation
+
+Node.js 22 auf DS223, DSM-Start/Watchdog, TLS-/CA-Vertrauen, NTP, Rechte, reale Speicherlast und Reboot-Verhalten müssen auf der Hardware geprüft werden. Ohne Docker betreibbar; die bestehende systemd-Vorlage ist keine zugesicherte DSM-Installation. Kein produktiver Worker aktiviert, kein Deployment, keine Migration ausgeführt.
+
+Erfolgsverifikation bleibt offen: Der bisher beobachtete Stringtest `Erfolg` reicht allein nicht. Ein späterer autorisierter Schreibtest müsste positive Antwort UND eigene passende Belegung (Datum, Säule, Zeiten, Eigentümer) unter Berücksichtigung des Vorzustands belegen. Der neue Adapter implementiert bewusst weder den Schreibrequest noch einen `booked`-Erfolgspfad.
+
+Neue Tests verwenden ausschließlich synthetische Fetch-/Repository-Doubles. Die bestehenden Browser-Tests verwenden lokale Testseiten. Keine Tests greifen auf ERGO oder Neon zu.
+
+Sicherheitswartung in dieser Phase: Next.js 16.3.6 → 16.3.8 behebt die im Audit gemeldeten Advisories GHSA-3w37-wq28-93x7, GHSA-4jqv-mc3x-m676, GHSA-39w2-rjm5-chcv, GHSA-f87g-xv8r-7p7x, GHSA-mcj8-r9mp-w47p und GHSA-cjq9-62q9-8jv4. `source-map-js` wird innerhalb seines kompatiblen Bereichs aktualisiert (GHSA-68fv-2mgg-jv7q). Keine Dependency-Major-Upgrades und kein `audit fix --force`.
